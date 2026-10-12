@@ -7,7 +7,7 @@ button{padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:#1
 .card{background:#fff;border-radius:10px;padding:14px 18px;margin:12px 0;box-shadow:0 1px 3px #0002}
 .mode{display:inline-block;padding:3px 10px;border-radius:20px;font-size:13px;font-weight:600}
 .ai{background:#dff5e1;color:#1a6b2a}.off{background:#fff1cc;color:#7a5a00}
-.Proven{border-left:6px solid #2da44e}.Disputed{border-left:6px solid #d4a72c}.Unknown{border-left:6px solid #8c959f}
+.Proven{border-left:6px solid #2da44e}.Disputed{border-left:6px solid #d4a72c}.Unknown{border-left:6px solid #8c959f}.Provenfalse{border-left:6px solid #cf222e}
 .tag{font-size:12px;font-weight:700;text-transform:uppercase;color:#556}.flag{background:#fde2e2;color:#8a1c1c;padding:1px 6px;border-radius:4px;font-size:12px;margin-right:4px}
 .src{font-size:14px}.warn{background:#ffe0e0;border:2px solid #d1242f;color:#8a1c1c;padding:6px 10px;border-radius:6px;font-weight:700}.ok{background:#dff5e1;color:#1a6b2a;padding:3px 8px;border-radius:6px;font-weight:600}blockquote{margin:4px 0 4px 10px;padding-left:8px;border-left:3px solid #ccd;font-size:14px}.src a{font-weight:600}.muted{color:#667;font-size:13px}
 </style></head><body>
@@ -33,8 +33,8 @@ f.onsubmit=async e=>{e.preventDefault();out.innerHTML='<div class="card">Searchi
  <div class="muted">Source types checked: ${esc((d.source_types||[]).join(', '))}</div>
  ${a.note?`<p class="warn">${esc(a.note)}</p>`:''}${(a.model_errors||[]).length?`<p class="warn">Model(s) failed: ${esc(a.model_errors.join(', '))}</p>`:''}</div>`;
  if(a.strongest_counterargument)h+=`<div class="card Disputed"><div class="tag">Strongest counter-argument</div><p>${nl(a.strongest_counterargument)}</p></div>`;
- for(const cat of ['Proven','Disputed','Unknown']){const cs=(a.claims||[]).filter(c=>c.category===cat); if(!cs.length)continue;
-  h+=`<h2>${cat}</h2>`+cs.map(c=>`<div class="card ${cat}"><div class="tag">${cat}</div><b>${esc(c.claim)}</b>
+ for(const cat of ['Proven','Proven false','Disputed','Unknown']){const cs=(a.claims||[]).filter(c=>c.category===cat); if(!cs.length)continue;
+  h+=`<h2>${cat}</h2>`+cs.map(c=>`<div class="card ${cat.replace(' ','')}"><div class="tag">${cat}</div><b>${esc(c.claim)}</b>
   <p>${c.multi?(c.agree?`<span class="ok">✔ ${esc(c.agreement)}${c.strong?' - strong':''}</span>`:`<span class="warn">⚠️ ${esc(c.agreement)}</span>`):`<span class="muted">${esc(c.agreement)}</span>`}</p>
   <div><b>Supported by (exact quotes, checked against the source):</b>${quotes(c.support,'✅')}</div>
   <div><b>Contradicted by:</b>${quotes(c.contradict,'❌')}</div>

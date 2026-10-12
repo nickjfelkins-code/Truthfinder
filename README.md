@@ -39,13 +39,17 @@ export TF_MODELS="gemini|https://generativelanguage.googleapis.com/v1beta/openai
 Optional: `TF_GOOGLE_FACTCHECK_KEY` (free Google API key) adds the Google Fact Check Tools database.
 Free/local: [Ollama](https://ollama.com) at `http://localhost:11434/v1` with any key text, e.g. `llama3.1:8b`.
 
+### Free two-model setup (Gemini + Groq)
+Put your free keys in environment variables (never in files): `TF_GEMINI_API_KEY` and `TF_GROQ_API_KEY`, then run `./run_real.sh`.
+In `TF_MODELS`, a key written as `env:NAME` is read from that environment variable.
+
 ### How an AI answer is built
 1. Gather sources (encyclopedia, research, PubMed, official, news, fact-checkers, web, plus an **opposing-framing search**), filter off-topic, dedupe.
 2. Read the **full article text** of up to 8 web/news/official pages; pick up publish dates where available.
 3. Model #1 splits the question into 2-5 checkable claims (including the opposite claim).
 4. **Every chosen model judges every claim independently**, citing **exact quotes**.
 5. **Self-check in code:** each quote must literally appear in that source, or it's thrown out.
-6. Code rules: Proven needs 2+ verified quotes from 2+ source types and no contradiction; Disputed needs verified quotes on both sides.
+6. Code rules: Proven needs 2+ verified quotes (and "Proven false" needs 2+ verified contradicting quotes) from 2+ source types and no contradiction; Disputed needs verified quotes on both sides.
 7. **Cross-check:** if models disagree on a claim, it's shown in red and the *weaker* verdict is used. "Strong" only when all models agree.
 8. Results cached 24h (with a "re-check now" button) so repeat questions are free and instant.
 
