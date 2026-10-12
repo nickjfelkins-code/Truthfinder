@@ -23,10 +23,18 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const nl=s=>esc(s).replace(/\n/g,'<br>');
 fetch('/api/config').then(r=>r.json()).then(cfg=>{const ms=cfg.models;left.textContent=`Free questions left today: ${cfg.remaining} of ${cfg.per_person} (saved answers don't count).`;donate.innerHTML=cfg.donate_url?`<br><a class="donate" href="${esc(cfg.donate_url)}" target="_blank" rel="noopener">☕ Support Truth-Finder</a> (keeps it free for everyone)`:'<br>Donations: coming soon.';models.innerHTML=ms.length?'AI models to use (pick 2+ for a cross-check): '+ms.map(m=>`<label><input type="checkbox" class="mdl" value="${esc(m)}" checked> ${esc(m)}</label>`).join(' '):'No AI models set up - running in Basic mode (no verdicts).'});
 const quotes=(xs,icon)=>(xs||[]).length?xs.map(x=>`<blockquote>${icon} <a href="#s${x.id}">[${x.id}]</a> “${esc(x.quote)}”</blockquote>`).join(''):`<div class="muted">${icon} none</div>`;
-f.onsubmit=async e=>{e.preventDefault();out.innerHTML='<div class="card">Searching encyclopedias, research papers, official sites, fact-checkers and news, reading full articles, then cross-checking… (about 15-60 seconds)</div>';
+f.onsubmit=async e=>{e.preventDefault();out.innerHTML='<div class="card">Searching encyclopedias, research papers, official sites, fact-checkers and news, reading full articles, then cross-checking… (usually 2-5 minutes)</div>';
  const chosen=[...document.querySelectorAll('.mdl:checked')].map(x=>x.value);
  let d; try{const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q.value,models:chosen,refresh:e.submitter?.id==='refresh',refresh_sources:e.submitter?.id==='refresh_src'})});d=await r.json()}
  catch(err){out.innerHTML='<div class="card">Could not reach the Truth-Finder server. No answer was produced.</div>';return}
+ if(d.job_id){const jid=d.job_id,t0=Date.now();let fails=0;
+  while(true){await new Promise(r=>setTimeout(r,4000));let j;
+   try{j=await (await fetch('/api/job/'+jid)).json();fails=0}catch(err){if(++fails>10){out.innerHTML='<div class="card">Lost contact with the server. Try again in a few minutes - if it finished, the saved answer will show instantly.</div>';return}continue}
+   const m=Math.floor((Date.now()-t0)/60000),sec=Math.floor((Date.now()-t0)/1000)%60,tm=m?`${m} min ${sec} s`:`${sec} s`;
+   if(j.status==='queued'){out.innerHTML=`<div class="card">Waiting in line - you are number ${j.position||1}. Another question is being checked first (one at a time keeps it free)… ${tm}</div>`;continue}
+   if(j.status==='running'){out.innerHTML=`<div class="card">Checking sources… ${tm}<br><span class="muted">Searching encyclopedias, research papers, official sites, fact-checkers and news, reading full articles, then cross-checking with several AIs. This usually takes 2-5 minutes - keep this page open.</span></div>`;continue}
+   if(j.status==='done'){d=j.result;break}
+   d={error:j.error||'Something went wrong.'};break}}
  if(d.error){out.innerHTML=`<div class="card ${d.limited?'Disputed':''}">${esc(d.error)}</div>`;return}
  if(d.remaining!==undefined)left.textContent=`Free questions left today: ${d.remaining}.`;
  const a=d.analysis, ai=a.mode.startsWith('AI'), thin=a.confidence==='Evidence is thin';

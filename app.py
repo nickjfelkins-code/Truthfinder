@@ -228,7 +228,7 @@ def chat(m, prompt):
             "messages": [{"role": "user", "content": prompt}]}
     hdr = {"Authorization": f"Bearer {m['key']}"}
     for attempt in range(6):
-        r = requests.post(f"{m['base']}/chat/completions", timeout=180, headers=hdr, json=body)
+        r = requests.post(f"{m['base']}/chat/completions", timeout=(10, 90), headers=hdr, json=body)
         if r.status_code == 400 and "seed" in body:   # some providers reject "seed"; retry without it
             body.pop("seed"); continue
         if r.status_code == 400 and "response_format" in body and "json" in r.text.lower():
@@ -673,14 +673,45 @@ def ask():
         msg = check_limits(ids)
         if msg: return jsonify({"error": msg, "limited": True}), 429
         record(ids); INFLIGHT.update(ids)
-    try:
-        with AI_LOCK:
-            res = _answer(q, chosen, key, bool(body.get("refresh_sources")))
-    finally:
-        INFLIGHT.difference_update(ids)
-    res["remaining"] = remaining(ids)
-    resp = jsonify(res); resp.set_cookie("tf_id", cookie, max_age=86400 * 365, httponly=True, samesite="Lax")
+    job = {"id": secrets.token_urlsafe(12), "status": "queued", "created": time.time(), "started": None,
+           "result": None, "error": None, "question": q}
+    with JOBS_LOCK:
+        for k in [k for k, v in JOBS.items() if time.time() - v["created"] > 3600]: JOBS.pop(k)   # forget jobs after 1 hour
+        JOBS[job["id"]] = job; QUEUE.append(job["id"])
+    def work():
+        try:
+            with AI_LOCK:
+                job["status"], job["started"] = "running", time.time()
+                with JOBS_LOCK:
+                    if job["id"] in QUEUE: QUEUE.remove(job["id"])
+                res = _answer(q, chosen, key, bool(body.get("refresh_sources")))
+            res["remaining"] = remaining(ids); job["result"] = res; job["status"] = "done"
+        except Exception as e:
+            print(f"[job] {job['id']} failed: {e!r}", flush=True)
+            job["error"] = "Something went wrong while checking this question. Please try again later."; job["status"] = "error"
+        finally:
+            INFLIGHT.difference_update(ids)
+            with JOBS_LOCK:
+                if job["id"] in QUEUE: QUEUE.remove(job["id"])
+    threading.Thread(target=work, daemon=True).start()
+    resp = jsonify({"job_id": job["id"], "status": "queued"}); resp.status_code = 202
+    resp.set_cookie("tf_id", cookie, max_age=86400 * 365, httponly=True, samesite="Lax")
     return resp
+
+# Background jobs: a full check takes minutes, longer than Render's proxy keeps a request open, so /api/ask returns
+# a job id right away and the page polls /api/job/<id>.
+JOBS, QUEUE, JOBS_LOCK = {}, [], threading.Lock()
+
+@app.get("/api/job/<jid>")
+def job_status(jid):
+    j = JOBS.get(jid)
+    if not j: return jsonify({"error": "That check was not found (the server may have restarted). Please ask again.", "status": "missing"}), 404
+    out = {"status": j["status"], "elapsed": int(time.time() - j["created"])}
+    if j["status"] == "queued":
+        with JOBS_LOCK: out["position"] = QUEUE.index(jid) + 1 if jid in QUEUE else 1
+    if j["status"] == "done": out["result"] = j["result"]
+    if j["status"] == "error": out["error"] = j["error"]
+    return jsonify(out)
 
 PREP_PROMPT = """Help a fact-checking tool search the web. The user's QUESTION may have typos or slang.
 Return JSON: {"corrected_question": "the question with spelling fixed, same meaning",
