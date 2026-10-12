@@ -159,7 +159,7 @@ def gather(q):
             try: results += fu.result()
             except Exception as e: errors.append(f"{futs[fu]}: {type(e).__name__}")
     # Relevance gate: drop sources that share too few key words with the question (avoids padding with junk).
-    stop = {"what","does","did","is","are","the","was","were","why","how","who","when","that","this","with","from","have","really","true","invent"}
+    stop = {"what","does","did","is","are","the","was","were","why","how","who","when","that","this","with","from","have","really","true","invent","make","makes","people","cause","causes","about"}
     kw = {w for w in re.findall(r"[a-z0-9]+", q.lower()) if len(w) > 3 and w not in stop}
     need = max(1, (len(kw) + 1) // 2)
     def relevant(x):
