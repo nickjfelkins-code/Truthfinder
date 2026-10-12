@@ -1,0 +1,24 @@
+# Render Blueprint (NOT deployed). Free web service. Keys are entered in Render's dashboard as secrets, never here.
+services:
+  - type: web
+    name: truthfinder
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # 1 worker on purpose: daily limits and the one-at-a-time AI lock live in memory.
+    startCommand: gunicorn -w 1 --threads 8 --timeout 300 -b 0.0.0.0:$PORT app:app
+    envVars:
+      - key: TF_TRUST_PROXY
+        value: "1"
+      - key: TF_DAILY_LIMIT_PER_PERSON
+        value: "10"
+      - key: TF_GLOBAL_DAILY_CAP
+        value: "200"
+      - key: TF_MODELS
+        value: "gemini-3.5-flash-lite|https://generativelanguage.googleapis.com/v1beta/openai|env:TF_GEMINI_API_KEY|gemini-3.5-flash-lite;gpt-oss-120b|https://api.groq.com/openai/v1|env:TF_GROQ_API_KEY|openai/gpt-oss-120b;qwen3.8-27b|https://api.groq.com/openai/v1|env:TF_GROQ_API_KEY|qwen/qwen3.8-27b"
+      - key: TF_GEMINI_API_KEY
+        sync: false   # set in dashboard
+      - key: TF_GROQ_API_KEY
+        sync: false   # set in dashboard
+      - key: TF_DONATE_URL
+        sync: false   # set once Nicholas has a Ko-fi page; button stays hidden until then

@@ -27,6 +27,13 @@ keyword ranking, so it is the same every run); a third model (Qwen) with a trans
 dissent named, never called "strong"); fixed seed + temperature 0; a "reported belief" guard (quotes like "proponents
 claim..." no longer count as support); per-site fact-checker searches (Snopes, PolitiFact, FactCheck.org...).
 
+Added in v0.5: stable claim list (claim 1 is always built from the question with no AI; 2-3 AI sub-claims are written
+once and frozen for 30 days); headline answer (YES / NO / MIXED / NOT SETTLED); public-test protections; disclaimer,
+privacy note, donation button (hidden until a URL is set).
+Added in v0.6: "one domain = one voice" (same site, or near-copy text across sites, counts as one source for every
+threshold); adversarial reviewer pass (a model from the family least represented in the majority attacks each verdict;
+it can only LOWER a verdict, and only with a verified quote from a source not already weighed).
+
 ### Known gaps to fix next
 - Full text is read for up to 8 web pages; research papers still use abstracts/titles only.
 - Cross-checking only helps if the models are truly different (use different companies). They can still share the same blind spots.
@@ -47,6 +54,40 @@ claim..." no longer count as support); per-site fact-checker searches (Snopes, P
    - **Hugging Face Spaces** (free CPU tier, good for open AI projects).
    - **Fly.io** small machines (low cost, close to free at low traffic).
 4. AI: start with a free tier (Groq, OpenRouter free models, Google Gemini free tier) or donated credits.
+
+## GO-LIVE checklist (small free public test) - nothing below has been done yet
+
+**Recommended host: Render free web service** (checked 2026-10-12, https://render.com/docs/free):
+- $0, 512 MB RAM (app uses ~100 MB), allows outbound API calls, long requests OK, no card needed to start
+  (if a free limit is exceeded without a card on file, Render suspends the service instead of billing).
+- Downsides: sleeps after 15 min with no visitors (first visit then takes ~1 minute), files reset on restart
+  (cache + daily counters reset - acceptable for a test), 750 free hours/month (enough for one service),
+  may suspend free services with unusually heavy outbound traffic.
+- **Not recommended: Hugging Face Spaces** - its docs now say Docker/Gradio Spaces need a paid PRO plan
+  (https://huggingface.co/docs/hub/spaces-overview).
+
+**Accounts Nicholas would create (all $0):**
+| Account | Why | Card? |
+|---|---|---|
+| GitHub (github.com) | Holds the code; Render deploys from it | No |
+| Render (render.com) - sign in with GitHub | Runs the website | No (only if he later upgrades) |
+| Ko-fi (ko-fi.com) or Buy Me a Coffee | Donation page | No card; he links a PayPal or Stripe account to receive money |
+| Optional: Google Cloud API key for Fact Check Tools | Better fact-checker results | Free; no billing needed for this API |
+Already have: Gemini key (Google AI Studio) and Groq key.
+
+**Steps (I can do the starred ones once he's signed in and says go):**
+1. Nicholas creates the GitHub account and an empty public repo named `truthfinder`.
+2. * I push this folder to it (keys are not in the repo; .gitignore excludes cache/usage files).
+3. Nicholas creates Render account (GitHub login) -> New -> Blueprint -> picks the repo (uses `render.yaml`).
+4. Nicholas pastes TF_GEMINI_API_KEY and TF_GROQ_API_KEY into Render's secret fields (I never see or store them).
+5. * I check the live site: limits, disclaimer, a test question, error messages.
+6. Optional: Nicholas makes a Ko-fi page; we set TF_DONATE_URL in Render to show the button.
+7. Share the link with a few people first; watch Render logs for "[rate-limit]" lines.
+
+**Built-in protections:** 10 fresh questions/person/day (hashed IP + cookie; saved answers free), 200/day total
+(stays inside free AI limits), 15 s between questions, one question in progress per person, AI calls run one at a
+time (avoids free-tier rate limits), 300-character limit, disclaimer + privacy note on the page.
+All are settings: TF_DAILY_LIMIT_PER_PERSON, TF_GLOBAL_DAILY_CAP, TF_MIN_SECONDS_BETWEEN, TF_DONATE_URL.
 
 ## FINAL cost answer for going public (checked 2026-10-12; estimates are labeled)
 
