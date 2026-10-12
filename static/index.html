@@ -9,7 +9,7 @@ button{padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:#1
 .ai{background:#dff5e1;color:#1a6b2a}.off{background:#fff1cc;color:#7a5a00}
 .Proven{border-left:6px solid #2da44e}.Disputed{border-left:6px solid #d4a72c}.Unknown{border-left:6px solid #8c959f}.Provenfalse{border-left:6px solid #cf222e}
 .tag{font-size:12px;font-weight:700;text-transform:uppercase;color:#556}.flag{background:#fde2e2;color:#8a1c1c;padding:1px 6px;border-radius:4px;font-size:12px;margin-right:4px}
-.src{font-size:14px}.warn{background:#ffe0e0;border:2px solid #d1242f;color:#8a1c1c;padding:6px 10px;border-radius:6px;font-weight:700}.ok{background:#dff5e1;color:#1a6b2a;padding:3px 8px;border-radius:6px;font-weight:600}blockquote{margin:4px 0 4px 10px;padding-left:8px;border-left:3px solid #ccd;font-size:14px}.src a{font-weight:600}.muted{color:#667;font-size:13px}
+.src{font-size:14px}.maj{background:#fff1cc;border:2px solid #d4a72c;color:#6b4e00;padding:6px 10px;border-radius:6px;font-weight:700}.warn{background:#ffe0e0;border:2px solid #d1242f;color:#8a1c1c;padding:6px 10px;border-radius:6px;font-weight:700}.ok{background:#dff5e1;color:#1a6b2a;padding:3px 8px;border-radius:6px;font-weight:600}blockquote{margin:4px 0 4px 10px;padding-left:8px;border-left:3px solid #ccd;font-size:14px}.src a{font-weight:600}.muted{color:#667;font-size:13px}
 </style></head><body>
 <h1>🧭 Truth-Finder</h1><div class="sub">Free and open source, owned by everyone. Ask anything. Check the sources yourself.</div>
 <form id="f"><input id="q" placeholder="e.g. Did Nikola Tesla invent free energy?" autofocus><button>Find the truth</button></form>
@@ -25,7 +25,7 @@ f.onsubmit=async e=>{e.preventDefault();out.innerHTML='<div class="card">Searchi
  catch(err){out.innerHTML='<div class="card">Could not reach the Truth-Finder server. No answer was produced.</div>';return}
  if(d.error){out.innerHTML=`<div class="card">${esc(d.error)}</div>`;return}
  const a=d.analysis, ai=a.mode.startsWith('AI'), thin=a.confidence==='Evidence is thin';
- const dis=(a.claims||[]).filter(c=>c.multi&&!c.agree);
+ const dis=(a.claims||[]).filter(c=>c.multi&&!c.agree&&!c.majority);
  let h=`<div class="card"><span class="mode ${ai?'ai':'off'}">${esc(a.mode)}</span> ${d.cached?'<span class="muted">(saved answer from '+esc(d.checked_at)+' - <button id="refresh" form="f" style="padding:2px 8px;font-size:12px">re-check now</button>)</span>':'<span class="muted">checked '+esc(d.checked_at)+'</span>'}
  ${dis.length?`<p class="warn">⚠️ The AI models DISAGREE on ${dis.length} claim(s). Treat those as unsettled.</p>`:''}
  <p>${nl(a.summary)}</p><b>Confidence:</b> <span class="mode ${thin?'off':'ai'}">${esc(a.confidence)}</span>
@@ -35,7 +35,7 @@ f.onsubmit=async e=>{e.preventDefault();out.innerHTML='<div class="card">Searchi
  if(a.strongest_counterargument)h+=`<div class="card Disputed"><div class="tag">Strongest counter-argument</div><p>${nl(a.strongest_counterargument)}</p></div>`;
  for(const cat of ['Proven','Proven false','Disputed','Unknown']){const cs=(a.claims||[]).filter(c=>c.category===cat); if(!cs.length)continue;
   h+=`<h2>${cat}</h2>`+cs.map(c=>`<div class="card ${cat.replace(' ','')}"><div class="tag">${cat}</div><b>${esc(c.claim)}</b>
-  <p>${c.multi?(c.agree?`<span class="ok">✔ ${esc(c.agreement)}${c.strong?' - strong':''}</span>`:`<span class="warn">⚠️ ${esc(c.agreement)}</span>`):`<span class="muted">${esc(c.agreement)}</span>`}</p>
+  <p>${c.multi?(c.agree?`<span class="ok">✔ ${esc(c.agreement)}${c.strong?' - strong':''}</span>`:(c.majority?`<span class="maj">⚖️ ${esc(c.agreement)}</span>`:`<span class="warn">⚠️ ${esc(c.agreement)}</span>`)):`<span class="muted">${esc(c.agreement)}</span>`}</p>
   <div><b>Supported by (exact quotes, checked against the source):</b>${quotes(c.support,'✅')}</div>
   <div><b>Contradicted by:</b>${quotes(c.contradict,'❌')}</div>
   <p>${esc(c.explanation)}</p><p><b>Who benefits:</b> ${esc(c.who_benefits)}</p>

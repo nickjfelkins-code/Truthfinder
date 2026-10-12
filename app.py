@@ -95,7 +95,8 @@ def news(q, n=6):
 
 FACTCHECK_SITES = "site:snopes.com OR site:politifact.com OR site:factcheck.org OR site:fullfact.org OR site:reuters.com/fact-check OR site:apnews.com"
 def factcheckers(q, n=4):
-    out = duckduckgo(q.strip(" ?") + " " + FACTCHECK_SITES, n)
+    core = " ".join(sorted(keywords(q), key=q.lower().find))
+    out = duckduckgo(core + " site:snopes.com", 2) + duckduckgo(core + " site:politifact.com", 2) + duckduckgo(core + " fact check site:factcheck.org OR site:fullfact.org OR site:apnews.com OR site:reuters.com", 2)
     for s in out: s["kind"] = "Fact-checker"
     return out
 
@@ -129,7 +130,7 @@ LEANING = {"cnn.com":"Left","msnbc.com":"Left","huffpost.com":"Left","theguardia
   "reuters.com":"Center","bbc.com":"Center","bbc.co.uk":"Center","thehill.com":"Center","axios.com":"Center",
   "wsj.com":"Lean right","foxnews.com":"Right","nypost.com":"Lean right","washingtonexaminer.com":"Right",
   "dailywire.com":"Right","breitbart.com":"Right","nationalreview.com":"Right","forbes.com":"Center","snopes.com":"Fact-checker",
-  "factcheck.org":"Fact-checker","politifact.com":"Fact-checker","fullfact.org":"Fact-checker"}
+  "factcheck.org":"Fact-checker","aap.com.au":"Fact-checker","leadstories.com":"Fact-checker","checkyourfact.com":"Fact-checker","politifact.com":"Fact-checker","fullfact.org":"Fact-checker"}
 
 RELIABILITY = {
   "Encyclopedia": "Good overview; written by volunteers and can be edited by anyone. Check its footnotes.",
@@ -223,15 +224,18 @@ def configured_models():
 USAGE = []  # token counts for the current request (fine for a single-user prototype)
 
 def chat(m, prompt):
-    body = {"model": m["model"], "temperature": 0, "response_format": {"type": "json_object"},
+    body = {"model": m["model"], "temperature": 0, "seed": 7, "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": prompt}]}
     hdr = {"Authorization": f"Bearer {m['key']}"}
-    for attempt in range(4):
+    for attempt in range(6):
         r = requests.post(f"{m['base']}/chat/completions", timeout=180, headers=hdr, json=body)
+        if r.status_code == 400 and "seed" in body:   # some providers reject "seed"; retry without it
+            body.pop("seed"); continue
         if r.status_code == 400 and "response_format" in body and "json" in r.text.lower():
             body.pop("response_format"); body["messages"][0]["content"] += "\nReply with JSON only."; continue
         if r.status_code in (429, 503) and attempt < 3:   # rate limit / overloaded: wait and retry
             wait = min(float(r.headers.get("retry-after", 0) or 0) or 10 * (attempt + 1), 65)
+            print(f"[rate-limit] {m['label']} HTTP {r.status_code}, waiting {wait:.0f}s", flush=True)
             time.sleep(wait); continue
         break
     if not r.ok:
@@ -240,6 +244,7 @@ def chat(m, prompt):
     u = j.get("usage") or {}
     USAGE.append({"model": m["label"], "in": u.get("prompt_tokens", 0), "out": u.get("completion_tokens", 0)})
     c = (j["choices"][0]["message"].get("content") or "").strip()
+    c = re.sub(r"<think>.*?</think>", "", c, flags=re.S).strip()   # reasoning models (e.g. Qwen) may include this
     c = re.sub(r"^```(?:json)?|```$", "", c).strip()
     try: return json.loads(c)
     except json.JSONDecodeError:
@@ -250,6 +255,27 @@ def chat(m, prompt):
 def fmt_sources(sources, max_chars=2500):
     return "\n\n".join(f"[{x['id']}] ({x['kind']}{', '+x['leaning'] if x.get('leaning') else ''}{', '+x['date'] if x.get('date') else ''}) "
                        f"{x['title']} - {x['source']}\n{x['text'][:max_chars]}" for x in sources)
+
+STOP = {"what","does","did","is","are","the","was","were","why","how","who","when","that","this","with","from","have","really",
+        "true","make","makes","people","cause","causes","about","there","their","they","than","into","more","most","been","which"}
+def keywords(text):
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 3 and w not in STOP}
+
+def evidence_pack(sources, focus, per_source=450):
+    """Same compact, deterministic evidence for every model: the most relevant sentences of each source.
+    Ranking is plain keyword overlap, so it gives identical output every run (no AI involved)."""
+    kw = keywords(focus)
+    for x in sources:
+        sents = [t.strip() for t in re.split(r"(?<=[.!?])\s+", x["text"]) if len(t.strip()) > 25]
+        scored = sorted(((sum(w in t.lower() for w in kw), -i, t) for i, t in enumerate(sents)), reverse=True)
+        keep = sorted(scored[:4], key=lambda z: -z[1])          # top sentences, back in original order
+        out, n = [], 0
+        for _, _, t in keep:
+            if n + len(t) > per_source and out: break
+            out.append(t); n += len(t)
+        x["pack"] = " ... ".join(out)[: per_source + 200] or x["snippet"][:per_source]
+    return "\n\n".join(f"[{x['id']}] ({x['kind']}{', '+x['leaning'] if x.get('leaning') else ''}{', '+x['date'] if x.get('date') else ''}) "
+                       f"{x['title']} - {x['source']}\n{x['pack']}" for x in sources)
 
 CLAIMS_PROMPT = """You are a neutral fact-checker. Break the QUESTION into 2-5 specific, checkable claims that the SOURCES speak to
 (include the main claim and its strongest opposite). Return JSON: {"claims": ["...", "..."]}
@@ -304,9 +330,11 @@ def enforce(c, by_id):
     if c["category"] == "Disputed" and not (sup and con):
         c["category"] = "Unknown"; c["notes"].append("Downgraded from Disputed: no verified quotes on both sides.")
 
-def judge(m, q, claims, sources, by_id):
+REPORTED = re.compile(r"\b(claims?|claimed|proponents?|believers?|believes?|believed|alleged(ly)?|supposedly|rumou?rs?|myths?|scams?|hoax(es)?|conspirac(y|ies)|purported(ly)?|so-called)\b", re.I)
+
+def judge(m, q, claims, pack, by_id):
     c_txt = "\n".join(f"{i}. {c}" for i, c in enumerate(claims, 1))
-    d = chat(m, JUDGE_PROMPT.replace("{q}", q).replace("{c}", c_txt).replace("{s}", fmt_sources(sources, m["max_chars"])))
+    d = chat(m, JUDGE_PROMPT.replace("{q}", q).replace("{c}", c_txt).replace("{s}", pack))
     out = {}
     for c in d.get("claims", []):
         try: n = int(c.get("n"))
@@ -328,6 +356,12 @@ def judge(m, q, claims, sources, by_id):
         if bad1 or bad2:
             cc["notes"].append(f"{len(bad1)+len(bad2)} citation(s) removed: quote not found in the source text.")
         if cc_note: cc["notes"].append(cc_note)
+        # "Reported belief" guard: a quote saying someone CLAIMS/BELIEVES X is not evidence that X is true.
+        if not REPORTED.search(claims[n - 1]):
+            rep = [x for x in cc["support"] if REPORTED.search(x["quote"])]
+            if rep:
+                cc["support"] = [x for x in cc["support"] if x not in rep]
+                cc["notes"].append(f"{len(rep)} supporting quote(s) only reported a belief or claim (e.g. 'proponents claim'), so they don't count as evidence.")
         enforce(cc, by_id)
         out[n] = cc
     d["claims"] = out
@@ -339,12 +373,13 @@ def llm_analyze(q, sources, chosen=None):
     if not models: return None
     by_id = {x["id"]: x for x in sources}
     USAGE.clear(); t0 = time.time()
-    claims = chat(models[0], CLAIMS_PROMPT.replace("{q}", q).replace("{s}", fmt_sources(sources, models[0]["max_chars"]))).get("claims", [])[:5]
+    claims = chat(models[0], CLAIMS_PROMPT.replace("{q}", q).replace("{s}", evidence_pack(sources, q))).get("claims", [])[:5]
     claims = [str(c) for c in claims if str(c).strip()]
     if not claims: raise ValueError("no claims extracted")
+    pack = evidence_pack(sources, q + " " + " ".join(claims))   # identical evidence for every model
     results, errs = {}, []
     with cf.ThreadPoolExecutor(len(models)) as ex:   # each model judges independently, same sources + claims
-        futs = {ex.submit(judge, m, q, claims, sources, by_id): m["label"] for m in models}
+        futs = {ex.submit(judge, m, q, claims, pack, by_id): m["label"] for m in models}
         for f in cf.as_completed(futs):
             try: results[futs[f]] = f.result()
             except Exception as e: errs.append(f"{futs[f]}: {type(e).__name__}")
@@ -355,13 +390,18 @@ def llm_analyze(q, sources, chosen=None):
         per = {l: results[l]["claims"].get(n) for l in labels}
         cats = [p["category"] if p else "Unknown" for p in per.values()]
         agree = len(set(cats)) == 1
+        counts = {c: cats.count(c) for c in set(cats)}
+        top, topn = max(counts.items(), key=lambda kv: (kv[1], -RANK[kv[0]]))
         if len(labels) == 1:
             final, status = cats[0], "Only one model checked this (not cross-checked)"
         elif agree:
             final, status = cats[0], f"All {len(labels)} models agree"
+        elif topn * 2 > len(labels):   # clear majority (e.g. 2 of 3) - shown openly, never called "strong"
+            final = top
+            status = f"MAJORITY {topn} of {len(labels)} - dissent: " + ", ".join(f"{l}: {c}" for l, c in zip(labels, cats) if c != top)
         else:
             final = min(cats, key=lambda c: RANK[c])
-            if set(cats) == {"Proven", "Proven false"}: final = "Disputed"
+            if set(cats) <= {"Proven", "Proven false"}: final = "Disputed"
             status = "MODELS DISAGREE - " + ", ".join(f"{l}: {c}" for l, c in zip(labels, cats))
         def merge(k):
             seen, o = set(), []
@@ -373,6 +413,7 @@ def llm_analyze(q, sources, chosen=None):
         first = next((p for p in per.values() if p), {}) or {}
         out_claims.append({"claim": text, "category": final, "agree": agree, "multi": len(labels) > 1,
             "strong": agree and len(labels) > 1 and final != "Unknown", "agreement": status,
+            "majority": (not agree) and len(labels) > 2 and status.startswith("MAJORITY"),
             "per_model": {l: (p["category"] if p else "no answer") for l, p in per.items()},
             "support": merge("support"), "contradict": merge("contradict"),
             "supporting_sources": sorted({x["id"] for x in merge("support")}),

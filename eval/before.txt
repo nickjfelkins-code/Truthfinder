@@ -1,0 +1,5 @@
+== BEFORE: claims=20  all-models-agree=40%  unknown-because-disagree=50%  main-claim-stable=2/3
+  Did Nikola Tesla invent free energy?          main-claim verdicts per run: ['Unknown', 'Unknown']  | all: [['Disputed', 'Proven', 'Unknown'], ['Disputed', 'Unknown', 'Unknown', 'Unknown']]
+  Does universal basic income make people stop  main-claim verdicts per run: ['Unknown', 'Unknown']  | all: [['Unknown', 'Unknown', 'Unknown', 'Unknown'], ['Disputed', 'Disputed', 'Unknown']]
+  Is solar the cheapest source of electricity?  main-claim verdicts per run: ['Proven', 'Disputed']  | all: [['Proven', 'Unknown', 'Unknown', 'Unknown'], ['Disputed', 'Disputed']]
+  decisive (unanimous or majority) = 40%;  Gemini-vs-gpt-oss agreement = 40%
