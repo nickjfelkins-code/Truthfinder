@@ -22,6 +22,11 @@ Added in v0.2: multi-model cross-check (disagreements shown in red; weakest verd
 automatic check that each quote really appears in the source, full-article reading, fact-checker search, optional Google
 Fact Check Tools API, opposing-framing searches, dates and reliability notes per source type, 24h caching.
 
+Added in v0.4: identical compact "evidence pack" for every model (most relevant sentences per source, picked by plain
+keyword ranking, so it is the same every run); a third model (Qwen) with a transparent majority vote ("MAJORITY 2 of 3",
+dissent named, never called "strong"); fixed seed + temperature 0; a "reported belief" guard (quotes like "proponents
+claim..." no longer count as support); per-site fact-checker searches (Snopes, PolitiFact, FactCheck.org...).
+
 ### Known gaps to fix next
 - Full text is read for up to 8 web pages; research papers still use abstracts/titles only.
 - Cross-checking only helps if the models are truly different (use different companies). They can still share the same blind spots.
@@ -43,54 +48,37 @@ Fact Check Tools API, opposing-framing searches, dates and reliability notes per
    - **Fly.io** small machines (low cost, close to free at low traffic).
 4. AI: start with a free tier (Groq, OpenRouter free models, Google Gemini free tier) or donated credits.
 
-## Costs (prices checked 2026-10-12 on the providers' own pricing pages; they change often)
+## FINAL cost answer for going public (checked 2026-10-12; estimates are labeled)
 
-### Token estimate per question (current design: 2 models, full text) - ESTIMATE
-Measured on the box: the source pack for real questions was 19,760-23,609 characters (≈5,000-6,000 tokens).
-- Claim-splitting call (model 1): ≈6,500 in / 200 out
-- Judge call, per model: ≈7,000 in / ≈2,000 out (assumes JSON with quotes; "thinking" models may use more)
-- **Total for 2 models ≈ 21,000 input + 4,200 output tokens per question** (assumption, not measured on a real model yet)
+**Putting the code on GitHub costs $0.** Public repos are free. Publishing code does NOT mean running a public website;
+anyone could run their own copy with their own free keys. The costs below are only for running a public *website*.
 
-### Model prices (USD per 1M tokens, input / output)
-| Model | Price | Free tier? | Source |
-|---|---|---|---|
-| Google Gemini 2.5 Flash-Lite | $0.10 / $0.40 | **Yes** (free tier; free-tier data may be used to improve Google products; limits shown in AI Studio) | https://ai.google.dev/gemini-api/docs/pricing |
-| Google Gemini 3.1 Flash-Lite | $0.25 / $1.50 | Yes | same |
-| OpenAI gpt-5-nano | $0.05 / $0.40 | No | https://developers.openai.com/api/docs/pricing |
-| OpenAI gpt-4o-mini | $0.15 / $0.60 | No | same |
-| OpenAI gpt-5-mini | $0.25 / $2.00 | No | same |
-| Anthropic Claude Haiku 5.5 (prompts ≤100k) | $0.10 / $0.50 | Small trial credits only | https://docs.claude.com/en/docs/about-claude/pricing |
-| DeepSeek deepseek-flash | $0.30 / $1.20 peak, half off-peak | No | https://api-docs.deepseek.com/quick_start/pricing |
-| Groq openai/gpt-oss-120b | free tier: 30 req/min, 1,000 req/day, **8K tokens/min** | **Yes** | https://console.groq.com/docs/rate-limits |
-| Ollama (local) | $0 per question | n/a | runs on your own computer |
+### What one question actually uses (MEASURED on real runs, v0.4, 3 models)
+- 4 AI calls (claim split + 3 judges): about 8,300-10,600 input + 4,300-5,500 output tokens in total.
+- About 10 web searches (DuckDuckGo) + 6 free research/encyclopedia API calls + up to 8 page downloads.
+- 22-58 seconds per fresh question (cached repeats are instant).
 
-Notes: Groq's 8K tokens/minute free limit is smaller than one full judge prompt, so use the `max_chars` option (e.g. 700) for Groq; that means it sees less text. Anthropic and Google Gemini aren't natively "OpenAI-compatible" in every case; Gemini offers an OpenAI-compatible endpoint (used in the README example). Anthropic would need a small adapter (not built yet). Ollama: an 8B model needs roughly 8 GB of free RAM (GPU optional but much faster); it's slower and less accurate than hosted models (general guidance, not tested here).
+### Prices used
+- Gemini 3.5 Flash-Lite: free tier, or $0.30 in / $2.50 out per 1M tokens - https://ai.google.dev/gemini-api/docs/pricing
+- Groq free tier: 1,000 requests/day and 8K tokens/minute per model - https://console.groq.com/docs/rate-limits . Groq paid prices were NOT checked; assumed about $0.15 / $0.60 per 1M (ESTIMATE).
+- Search at scale: Brave Search API, $5 per 1,000 requests; even its free plan needs a credit card on file - https://brave.com/search/api/
+- Hosting: Render free (512 MB, sleeps when idle), $7/mo small, $25/mo 1 CPU, $175+/mo 4 CPU - https://render.com/pricing
 
-### Per-question and monthly cost - ESTIMATES (AI only, before caching)
-Pair A = cheapest cross-check (Gemini 2.5 Flash-Lite splits claims + judges; gpt-5-nano judges). Pair B = stronger (gpt-5-mini + Claude Haiku 5.5).
-| | Per question | ~100/mo (just Nicholas) | 1,000/mo | 30,000/mo | 300,000/mo |
-|---|---|---|---|---|---|
-| **Free tiers** (Gemini free + Groq free) | $0 | **$0** | $0 if under the daily limits (Groq 1,000/day) | not realistic on free tiers | no |
-| **Pair A** | ≈ $0.0034 | ≈ $0.34 | ≈ $3.40 | ≈ $100 | ≈ $1,000 |
-| **Pair B** | ≈ $0.0095 | ≈ $0.95 | ≈ $9.50 | ≈ $285 | ≈ $2,850 |
-| **Local Ollama** | $0 (electricity) | $0 | $0, slow | needs real servers | needs real servers |
-Caching: if ~30% of public questions repeat (assumption), cut AI costs ~30%.
+### Tiers (monthly, ESTIMATES)
+| Tier | Questions/mo | AI | Search | Hosting | **Total** | Notes |
+|---|---|---|---|---|---|---|
+| 0. Just Nicholas | ~100 | $0 (free tiers) | $0 (DuckDuckGo) | $0 (his PC or the box) | **$0** | Works today |
+| 1. Small public beta | ~1,000 (~35/day) | $0 (free tiers; about 1 question/minute max) | $0 (DuckDuckGo; may get blocked at times) | $0-7 | **$0-7** | Slow first load on free hosting; free-tier providers may use inputs to improve their models |
+| 2. Real public site | ~30,000 (~1,000/day) | ~$240 (~$0.008/question, paid tiers needed) | ~$750 (5 Brave searches/question) | ~$25-85 | **~$1,000** (~$700 with 30% cache hits) | Free tiers can't handle this |
+| 3. Popular | ~300,000 | ~$2,400 | ~$7,500 | ~$175-450 | **~$10,000** (~$7,000 with caching) | Needs grants/donations |
 
-### Hosting and search - ESTIMATES
-| Scale | Hosting | Search | Notes |
-|---|---|---|---|
-| Just Nicholas | $0: run on his own computer, or Render free web service (512 MB, sleeps when idle) - https://render.com/pricing | $0 | |
-| 1,000/mo | $0-7 (Render free or $7/mo "less than 1 CPU") | $0 | |
-| 30,000/mo | ≈ $25-85/mo | DuckDuckGo scraping will likely get blocked; a paid search API would be needed (price NOT verified here) | Wikipedia/OpenAlex/Crossref/PubMed are free but rate-limited; cache |
-| 300,000/mo | ≈ $175-450/mo (several CPUs) | paid search API, likely the biggest cost after AI (not verified) | |
+Correction to earlier versions of this plan: at scale, **search, not AI, is the biggest cost.** Ways to cut it: fewer
+searches per question (~5 instead of ~10), heavy caching, or a self-hosted SearXNG metasearch server (free software, but
+it relies on other engines and can get blocked; untested).
 
-**Rough all-in totals (estimates): just Nicholas $0; 1,000/mo ≈ $0-15; 30,000/mo ≈ $150-400; 300,000/mo ≈ $1,500-4,000+.**
-
-### Cheapest way for Nicholas to start testing real AI mode ($0)
-1. Get a free Gemini API key at Google AI Studio (aistudio.google.com) with a Google account.
-2. Get a free Groq key at console.groq.com (different model family = a more independent cross-check).
-3. Run with the `TF_MODELS` example in the README. Cost: $0 within free limits.
-Caveat: free-tier inputs may be used by the provider to improve their products, so don't type anything private.
+### Recommendation
+Publishing the code on GitHub is free and safe. Run a public website only at Tier 1 ($0-7/mo) until there is funding
+(grants/donations) for Tier 2.
 
 ## Keeping it free
 - **Caching:** the same popular questions get asked a lot; reuse answers (with a "refresh" button).
