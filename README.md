@@ -28,15 +28,26 @@ Needs Python 3.10+.
 ```
 Then open http://127.0.0.1:5000
 
-### Turn on AI analysis (optional)
-Any OpenAI-compatible API works (OpenAI, Groq, OpenRouter, a local Ollama server, etc.):
+### Turn on AI analysis (optional) - use 2+ models for a cross-check
+Any OpenAI-compatible API works. List models in `TF_MODELS`, separated by `;`, each as
+`label|base_url|api_key|model[|max_chars_per_source]`:
 ```
-export TF_API_KEY=your-key
-export TF_BASE_URL=https://api.openai.com/v1   # or another provider's /v1 URL
-export TF_MODEL=gpt-4o-mini                     # any model that provider offers
+export TF_MODELS="gemini|https://generativelanguage.googleapis.com/v1beta/openai|YOUR_GEMINI_KEY|gemini-2.5-flash-lite;groq|https://api.groq.com/openai/v1|YOUR_GROQ_KEY|openai/gpt-oss-120b|700"
 ./run.sh
 ```
-Free/local option: run [Ollama](https://ollama.com) and use `TF_BASE_URL=http://localhost:11434/v1 TF_API_KEY=ollama TF_MODEL=llama3.1`.
+(One model only? `TF_API_KEY`, `TF_BASE_URL`, `TF_MODEL` still work, but answers are marked "not cross-checked".)
+Optional: `TF_GOOGLE_FACTCHECK_KEY` (free Google API key) adds the Google Fact Check Tools database.
+Free/local: [Ollama](https://ollama.com) at `http://localhost:11434/v1` with any key text, e.g. `llama3.1:8b`.
+
+### How an AI answer is built
+1. Gather sources (encyclopedia, research, PubMed, official, news, fact-checkers, web, plus an **opposing-framing search**), filter off-topic, dedupe.
+2. Read the **full article text** of up to 8 web/news/official pages; pick up publish dates where available.
+3. Model #1 splits the question into 2-5 checkable claims (including the opposite claim).
+4. **Every chosen model judges every claim independently**, citing **exact quotes**.
+5. **Self-check in code:** each quote must literally appear in that source, or it's thrown out.
+6. Code rules: Proven needs 2+ verified quotes from 2+ source types and no contradiction; Disputed needs verified quotes on both sides.
+7. **Cross-check:** if models disagree on a claim, it's shown in red and the *weaker* verdict is used. "Strong" only when all models agree.
+8. Results cached 24h (with a "re-check now" button) so repeat questions are free and instant.
 
 ## Files
 - `app.py` - backend: source fetchers, relevance filter, AI analysis, safety checks
