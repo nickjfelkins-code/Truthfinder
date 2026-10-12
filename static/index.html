@@ -1,0 +1,41 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Truth-Finder</title><style>
+body{font-family:system-ui,sans-serif;max-width:860px;margin:auto;padding:20px;background:#f6f7f9;color:#1d2330}
+h1{margin:.2em 0}.sub{color:#556}form{display:flex;gap:8px;margin:18px 0}
+input{flex:1;padding:12px;font-size:17px;border:1px solid #bbc;border-radius:8px}
+button{padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:#1f6feb;color:#fff;cursor:pointer}
+.card{background:#fff;border-radius:10px;padding:14px 18px;margin:12px 0;box-shadow:0 1px 3px #0002}
+.mode{display:inline-block;padding:3px 10px;border-radius:20px;font-size:13px;font-weight:600}
+.ai{background:#dff5e1;color:#1a6b2a}.off{background:#fff1cc;color:#7a5a00}
+.Proven{border-left:6px solid #2da44e}.Disputed{border-left:6px solid #d4a72c}.Unknown{border-left:6px solid #8c959f}
+.tag{font-size:12px;font-weight:700;text-transform:uppercase;color:#556}.flag{background:#fde2e2;color:#8a1c1c;padding:1px 6px;border-radius:4px;font-size:12px;margin-right:4px}
+.src{font-size:14px}.src a{font-weight:600}.muted{color:#667;font-size:13px}
+</style></head><body>
+<h1>🧭 Truth-Finder</h1><div class="sub">Free and open source, owned by everyone. Ask anything. Check the sources yourself.</div>
+<form id="f"><input id="q" placeholder="e.g. Did Nikola Tesla invent free energy?" autofocus><button>Find the truth</button></form>
+<div id="out"></div>
+<script>
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const refs=ids=>(ids||[]).length?ids.map(i=>`<a href="#s${i}">[${i}]</a>`).join(' '):'<i>none</i>';
+f.onsubmit=async e=>{e.preventDefault();out.innerHTML='<div class="card">Searching encyclopedias, research papers, official sites and news…</div>';
+ let d; try{const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q.value})});d=await r.json()}
+ catch(err){out.innerHTML='<div class="card">Could not reach the Truth-Finder server. No answer was produced.</div>';return}
+ if(d.error){out.innerHTML=`<div class="card">${esc(d.error)}</div>`;return}
+ const a=d.analysis, ai=!a.mode.startsWith('Basic'), thin=a.confidence==='Evidence is thin';
+ let h=`<div class="card"><span class="mode ${ai?'ai':'off'}">${esc(a.mode)}</span>
+ <p>${esc(a.summary)}</p><b>Confidence:</b> <span class="mode ${thin?'off':'ai'}">${esc(a.confidence)}</span>
+ <ul class="muted">${(a.confidence_reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('')}</ul>
+ <div class="muted">Source types checked: ${esc((d.source_types||[]).join(', '))}</div>
+ ${a.note?`<p class="muted">${esc(a.note)}</p>`:''}</div>`;
+ if(a.strongest_counterargument)h+=`<div class="card Disputed"><div class="tag">Strongest counter-argument</div><p>${esc(a.strongest_counterargument)}</p></div>`;
+ for(const cat of ['Proven','Disputed','Unknown']){const cs=(a.claims||[]).filter(c=>c.category===cat); if(!cs.length)continue;
+  h+=`<h2>${cat}</h2>`+cs.map(c=>`<div class="card ${cat}"><div class="tag">${cat}</div><b>${esc(c.claim)}</b><p>${esc(c.explanation)}</p>
+  <p><b>Who benefits:</b> ${esc(c.who_benefits)}</p><div class="muted">✅ Supported by: ${refs(c.supporting_sources)} &nbsp; ❌ Contradicted by: ${refs(c.contradicting_sources)}</div></div>`).join('')}
+ h+=`<div class="card"><div class="tag">How to verify this yourself</div><ol>${(a.verify_yourself||[]).map(v=>`<li>${esc(v)}</li>`).join('')}</ol></div>`;
+ h+=`<h2>All sources (${d.sources.length})</h2>`;
+ for(const k of [...new Set(d.sources.map(s=>s.kind))]){h+=`<h3>${esc(k)}</h3>`+d.sources.filter(s=>s.kind===k).map(s=>`<div class="card src" id="s${s.id}">[${s.id}] <a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a> <span class="muted">${esc(s.source)} · ${esc(s.kind)}${s.leaning?' · leaning (approx.): '+esc(s.leaning):''}</span>
+  <div>${(s.flags||[]).map(x=>`<span class="flag">${esc(x)}</span>`).join('')}</div><p>${esc(s.snippet)}</p></div>`).join('')}
+ if(d.source_errors.length)h+=`<p class="muted">⚠️ Some sources didn't respond: ${esc(d.source_errors.join(', '))}</p>`;
+ out.innerHTML=h};
+</script></body></html>
+<script>const p=new URLSearchParams(location.search).get('q');if(p){q.value=p;f.requestSubmit()}</script>
