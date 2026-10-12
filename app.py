@@ -10,7 +10,7 @@ TIMEOUT = 12
 app = Flask(__name__, static_folder="static")
 
 # ---------------- Sources (all free, no keys) ----------------
-def wikipedia(q, n=4):
+def wikipedia(q, n=6):
     r = requests.get("https://en.wikipedia.org/w/api.php", headers=UA, timeout=TIMEOUT, params={
         "action": "query", "format": "json", "generator": "search", "gsrsearch": q, "gsrlimit": n,
         "prop": "extracts|info", "exintro": 1, "explaintext": 1, "exchars": 900, "inprop": "url"})
@@ -234,7 +234,10 @@ def chat(m, prompt):
         if r.status_code == 400 and "response_format" in body and "json" in r.text.lower():
             body.pop("response_format"); body["messages"][0]["content"] += "\nReply with JSON only."; continue
         if r.status_code in (429, 503) and attempt < 5:   # rate limit / overloaded: wait and retry
-            wait = min(float(r.headers.get("retry-after", 0) or 0) or 10 * (attempt + 1), 65)
+            ra = float(r.headers.get("retry-after", 0) or 0)
+            if ra > 120:   # daily quota used up: don't stall the user for minutes, skip this model (shown as an error)
+                print(f"[rate-limit] {m['label']} quota exhausted (retry-after {ra:.0f}s): {r.text[:160]}", flush=True); break
+            wait = min(ra or 10 * (attempt + 1), 65)
             print(f"[rate-limit] {m['label']} HTTP {r.status_code}, waiting {wait:.0f}s", flush=True)
             time.sleep(wait); continue
         break
@@ -417,8 +420,8 @@ CLAIMS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "claims.j
 try: CLAIMS = json.load(open(CLAIMS_FILE))
 except Exception: CLAIMS = {}
 def qkey(q): return " ".join(re.findall(r"[a-z0-9]+", q.lower()))
-def fixed_claims(q, m, sources):
-    k = qkey(q); main = f'The answer to the question "{q.strip()}" is YES.'
+def fixed_claims(q, m, sources, main=None):
+    k = qkey(q); main = main or f'The answer to the question "{q.strip()}" is YES.'
     v = CLAIMS.get(k)
     if v and time.time() - v["t"] < 30 * 86400:
         return [main] + v["claims"], "claim list reused (frozen for consistency)"
@@ -481,13 +484,13 @@ def critique(q, out_claims, models, results, pack, by_id):
     return {"critic": None, "applied": 0, "note": "Critique pass failed (all models unavailable)."}
 
 RANK = {"Proven": 2, "Proven false": 2, "Disputed": 1, "Unknown": 0}
-def llm_analyze(q, sources, chosen=None):
+def llm_analyze(q, sources, chosen=None, main=None):
     models = [m for m in configured_models() if not chosen or m["label"] in chosen]
     if not models: return None
     by_id = {x["id"]: x for x in sources}
     n_voices = assign_voices(sources)
     USAGE.clear(); t0 = time.time()
-    claims, claims_note = fixed_claims(q, models[0], sources)
+    claims, claims_note = fixed_claims(q, models[0], sources, main)
     pack = evidence_pack(sources, q + " " + " ".join(claims))   # identical evidence for every model
     results, errs = {}, []
     with cf.ThreadPoolExecutor(len(models)) as ex:   # each model judges independently, same sources + claims
@@ -663,7 +666,7 @@ def ask():
     chosen = [c for c in body.get("models") or [] if isinstance(c, str)][:5]
     if len(q) < 8: return jsonify({"error": "Type a full question first (at least a few words)."}), 400
     key = json.dumps([qkey(q), sorted(chosen), [m["label"] for m in configured_models()]])
-    if not body.get("refresh") and (hit := cache_get(key)):
+    if not body.get("refresh") and not body.get("refresh_sources") and (hit := cache_get(key)):
         hit = dict(hit); hit["cached"] = True; return jsonify(hit)          # shared cache: free for everyone, not counted
     ids, cookie = person_ids()
     with LIMIT_LOCK:
@@ -672,16 +675,110 @@ def ask():
         record(ids); INFLIGHT.update(ids)
     try:
         with AI_LOCK:
-            res = _answer(q, chosen, key)
+            res = _answer(q, chosen, key, bool(body.get("refresh_sources")))
     finally:
         INFLIGHT.difference_update(ids)
     res["remaining"] = remaining(ids)
     resp = jsonify(res); resp.set_cookie("tf_id", cookie, max_age=86400 * 365, httponly=True, samesite="Lax")
     return resp
 
-def _answer(q, chosen, key):
+PREP_PROMPT = """Help a fact-checking tool search the web. The user's QUESTION may have typos or slang.
+Return JSON: {"corrected_question": "the question with spelling fixed, same meaning",
+ "main_claim": "ONE plain statement that, if TRUE, means the answer is YES (for 'A or B?' questions, state the mainstream-
+   testable option, e.g. 'The Earth is round.')",
+ "search_queries": ["4-6 short web searches using synonyms (e.g. UFO/UAP), key people/places, and official bodies or
+   reports that would have evidence on BOTH sides"]}
+QUESTION: {q}"""
+
+def prepare(q):
+    """Spell-fix, a testable main claim, and extra search queries. Written once per question and frozen (claims.json)."""
+    k = "prep:" + qkey(q)
+    v = CLAIMS.get(k)
+    if v and time.time() - v["t"] < 30 * 86400: return v["data"]
+    models = configured_models()
+    if not models: return {}
+    try: d = chat(models[0], PREP_PROMPT.replace("{q}", q))
+    except Exception: return {}
+    d = {"corrected_question": str(d.get("corrected_question") or q)[:300], "main_claim": str(d.get("main_claim") or "")[:300],
+         "search_queries": [str(x)[:120] for x in (d.get("search_queries") or []) if str(x).strip()][:6]}
+    CLAIMS[k] = {"t": time.time(), "data": d}
+    try: json.dump(CLAIMS, open(CLAIMS_FILE, "w"))
+    except Exception: pass
+    return d
+
+MIN_VOICES = int(os.environ.get("TF_MIN_VOICES", 15))
+def gather_wide(q, extra_queries):
+    """Search the question; if fewer than MIN_VOICES independent voices, keep widening with the extra queries."""
     sources, errors = gather(q)
-    enrich(sources)
+    tried = [q]
+    for alt in extra_queries:
+        for x in sources: x.setdefault("text", x["snippet"])
+        if assign_voices(sources) >= MIN_VOICES: break
+        more, err2 = gather(alt); tried.append(alt)
+        seen = {re.sub(r"^https?://(www\.)?|/$", "", (x["url"] or "").lower()) for x in sources}
+        for x in more:
+            k2 = re.sub(r"^https?://(www\.)?|/$", "", (x["url"] or "").lower())
+            if k2 not in seen: seen.add(k2); x["via"] = (x.get("via") or "") + f" wider search: {alt}"; sources.append(x)
+        errors += [e for e in err2 if "off-topic" not in e]
+    # Cap: more than ~30 sources blows past free AI token limits (one UAP run took 16 min) without better answers.
+    cap = int(os.environ.get("TF_MAX_SOURCES", "30"))
+    if len(sources) > cap:
+        errors.append(f"{len(sources) - cap} extra source(s) beyond the first {cap} were left out to stay within free AI limits.")
+        sources = sources[:cap]
+    for i, x in enumerate(sources, 1): x["id"] = i; x.pop("text", None)
+    return sources, errors, tried
+
+def make_banner(a, sources, kinds, by_id=None):
+    """Big, unmistakable answer + one plain sentence. Built by code from the verdict and real quotes (no extra AI)."""
+    def q1(xs):
+        return f' For example, {by_id[xs[0]["id"]]["source"]} says: "{xs[0]["quote"][:160]}".' if xs and by_id else ""
+    if a.get("confidence") == "Evidence is thin" and not a.get("claims"):
+        return {"word": "NOT ENOUGH EVIDENCE TO SAY", "color": "gray",
+                "why": f"We only found {len(sources)} relevant source(s) of {len(kinds)} kind(s), which is not enough to judge fairly. "
+                       "To answer, we'd need at least 3 relevant sources of 2 or more kinds (for example an official report and a research study)."}
+    if not a.get("claims"):
+        return {"word": "NO VERDICT (AI CHECK IS OFF)", "color": "gray",
+                "why": "The AI check isn't running right now, so we only list the sources. Read them to decide for yourself."}
+    c = a["claims"][0]; stmt = c["claim"].rstrip(".")
+    nv = lambda xs: len({by_id[x["id"]]["voice"] for x in xs}) if by_id else len(xs)
+    cat = c["category"]
+    if cat == "Proven":
+        return {"word": "YES", "color": "green", "statement": stmt,
+                "why": f'"{stmt}" is backed by {nv(c["support"])} independent sources, and none we found disagree.' + q1(c["support"])}
+    if cat == "Proven false":
+        return {"word": "NO", "color": "red", "statement": stmt,
+                "why": f'"{stmt}" is not supported: {nv(c["contradict"])} independent sources say otherwise, and none we found back it up.' + q1(c["contradict"])}
+    if cat == "Disputed":
+        return {"word": "MIXED", "color": "orange", "statement": stmt,
+                "why": f'Trustworthy sources disagree about "{stmt}": {nv(c["support"])} lean yes and {nv(c["contradict"])} lean no.'}
+    return {"word": "NOT SETTLED", "color": "gray", "statement": stmt,
+            "why": f'The sources we found don\'t clearly prove or disprove "{stmt}". '
+                   + ("The AI checkers also disagreed with each other. " if not c.get("agree") else "")
+                   + "Better evidence, like an official report or a solid study that tests this directly, would be needed."}
+
+# Pinned sources: web search returns different pages every time, which made verdicts wobble. The source list for a
+# question is saved (7 days) and reused, so a re-check re-judges the SAME evidence. "Re-check sources" fetches fresh ones.
+SRC_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sources.json")
+try: PINNED = json.load(open(SRC_FILE))
+except Exception: PINNED = {}
+SRC_TTL = 7 * 86400
+
+def _answer(q, chosen, key, refresh_sources=False):
+    prep = prepare(q)
+    q_search = prep.get("corrected_question") or q
+    pk = qkey(q); pin = PINNED.get(pk)
+    if pin and not refresh_sources and time.time() - pin["t"] < SRC_TTL:
+        sources, errors, tried = json.loads(json.dumps(pin["sources"])), pin["errors"], pin["tried"]
+        pinned_note = f"Using the source list saved on {time.strftime('%Y-%m-%d %H:%M', time.localtime(pin['t']))} (same evidence every re-check)."
+    else:
+        sources, errors, tried = gather_wide(q_search, prep.get("search_queries", []))
+        enrich(sources)
+        for x in sources: x.pop("voice", None); x.pop("same_voice_as", None)
+        PINNED[pk] = {"t": time.time(), "sources": sources, "errors": errors, "tried": tried}
+        try: json.dump(PINNED, open(SRC_FILE, "w"))
+        except Exception: pass
+        sources = json.loads(json.dumps(sources))
+        pinned_note = "Fresh source search (now saved for 7 days)."
     kinds = {x["kind"] for x in sources}
     analysis, note = None, None
     if len(sources) < 3 or len(kinds) < 2:
@@ -690,10 +787,14 @@ def _answer(q, chosen, key):
                     "confidence_reasons": [f"Only {len(sources)} relevant source(s) of {len(kinds)} type(s) found."]
                                           + ([f"Source problems: {', '.join(errors)}"] if errors else [])}
     else:
-        try: analysis = llm_analyze(q, sources, chosen)
+        try: analysis = llm_analyze(q_search, sources, chosen, prep.get("main_claim") or None)
         except Exception as e: note = f"AI analysis failed ({type(e).__name__}: {str(e)[:120]}); showing basic mode, no verdicts."
         if not analysis: analysis = heuristic(q, sources)
     if note: analysis["note"] = note
+    by_id = {x["id"]: x for x in sources} if sources and "voice" in sources[0] else None
+    analysis["banner"] = make_banner(analysis, sources, kinds, by_id)
+    analysis["searched"] = tried; analysis["sources_note"] = pinned_note
+    if q_search.strip().lower() != q.strip().lower(): analysis["corrected_question"] = q_search
     analysis["verify_yourself"] = list(dict.fromkeys((analysis.get("verify_yourself") or []) + VERIFY))
     for x in sources: x["text"] = x["text"][:1500]
     res = {"question": q, "source_types": sorted(kinds), "sources": sources, "source_errors": errors,
