@@ -20,8 +20,21 @@ def wikipedia(q, n=6):
              "source": "Wikipedia", "kind": "Encyclopedia"} for p in pages]
 
 DDG_LOCK = __import__("threading").Lock()
+DDG_DOWN_UNTIL = 0
 def duckduckgo(q, n=5):
     # DuckDuckGo throttles parallel requests, so take turns and retry once if we get nothing back.
+    global DDG_DOWN_UNTIL
+    if time.time() < DDG_DOWN_UNTIL: raise RuntimeError("DuckDuckGo unreachable from this server (skipped for 10 min)")
+    with DDG_LOCK:
+        for attempt in range(2):
+            try: out = _ddg(q, n)
+            except (requests.ConnectionError, requests.Timeout):
+                DDG_DOWN_UNTIL = time.time() + 600; raise   # blocked/unreachable: fail fast instead of waiting on every search
+            if out: break
+            time.sleep(1.5)
+        time.sleep(0.6)
+    return out
+def _unused(q, n):
     with DDG_LOCK:
         for attempt in range(2):
             out = _ddg(q, n)
