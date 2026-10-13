@@ -73,7 +73,10 @@ def duckduckgo(q, n=5):
     """Web search: Brave when TF_BRAVE_API_KEY is set, else (or if Brave fails) DuckDuckGo."""
     if brave_on():
         try: return brave(q, n)
-        except Exception as e: print("Brave unavailable, falling back to DuckDuckGo:", e)
+        except Exception as e:
+            print("Brave unavailable, falling back to DuckDuckGo:", e)
+            try: return _duckduckgo(q, n)
+            except Exception as e2: raise RuntimeError(f"Brave failed ({type(e).__name__}: {str(e)[:80]}); DuckDuckGo fallback failed ({type(e2).__name__})")
     return _duckduckgo(q, n)
 
 def _duckduckgo(q, n=5):
@@ -173,9 +176,10 @@ def factcheckers(q, n=4):
 def google_factcheck(q, n=5):
     """Google Fact Check Tools API: free, but needs a (free) Google API key in TF_GOOGLE_FACTCHECK_KEY."""
     key = os.environ.get("TF_GOOGLE_FACTCHECK_KEY")
-    if not key: return []
+    if not key: raise RuntimeError("TF_GOOGLE_FACTCHECK_KEY not set")
     r = requests.get("https://factchecktools.googleapis.com/v1alpha1/claims:search", timeout=TIMEOUT,
                      params={"query": q, "pageSize": n, "key": key, "languageCode": "en"})
+    if r.status_code != 200: raise RuntimeError(f"Google Fact Check HTTP {r.status_code}")
     out = []
     for c in r.json().get("claims", []):
         for rv in c.get("claimReview", [])[:1]:
@@ -772,6 +776,12 @@ def ask():
 # Background jobs: a full check takes minutes, longer than Render's proxy keeps a request open, so /api/ask returns
 # a job id right away and the page polls /api/job/<id>.
 JOBS, QUEUE, JOBS_LOCK = {}, [], threading.Lock()
+
+@app.get("/api/health")
+def health():  # booleans only, never key values
+    return jsonify({"brave_key_set": brave_on(), "google_factcheck_key_set": bool(os.environ.get("TF_GOOGLE_FACTCHECK_KEY")),
+                    "gemini_key_set": bool(os.environ.get("TF_GEMINI_API_KEY")), "groq_key_set": bool(os.environ.get("TF_GROQ_API_KEY")),
+                    "brave_calls_this_month": _brave_month_count()})
 
 @app.get("/api/job/<jid>")
 def job_status(jid):
