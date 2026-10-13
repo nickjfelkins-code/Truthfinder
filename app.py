@@ -44,11 +44,22 @@ def _brave_month_count(inc=False):
 
 BRAVE_RESERVE = int(os.environ.get("TF_BRAVE_RESERVE", "100"))   # stop when Brave says this few monthly calls are left
 BRAVE_REMAINING = {"month": None, "left": None}   # from Brave's own X-RateLimit-Remaining header (survives our restarts: Brave keeps the count)
+BRAVE_HDRS = {}   # last rate-limit headers from Brave (numbers only, no secrets) - shown in /api/health for diagnosis
 def _brave_quota_left(headers):
-    """Brave sends e.g. 'X-RateLimit-Remaining: 1, 1998' = (this second, this month). Return the monthly number, or None."""
-    v = headers.get("X-RateLimit-Remaining") or ""
-    nums = [int(x) for x in re.findall(r"\d+", v)]
-    return nums[-1] if len(nums) >= 2 else None
+    """Monthly calls left, per Brave's own counter. Values are comma lists aligned with X-RateLimit-Policy windows
+    (e.g. Policy '1;w=1, 2000;w=2678400', Remaining '0, 1998'). Use the longest window (>= 1 day) with a real limit;
+    if there is no such window (e.g. a credit-based plan), return None and rely on our own cap."""
+    for h in ("X-RateLimit-Limit", "X-RateLimit-Policy", "X-RateLimit-Remaining", "X-RateLimit-Reset"):
+        if headers.get(h): BRAVE_HDRS[h] = headers.get(h)[:80]
+    rem = [x.strip() for x in (headers.get("X-RateLimit-Remaining") or "").split(",")]
+    pol = [x.strip() for x in (headers.get("X-RateLimit-Policy") or "").split(",")]
+    best = None
+    for i, p in enumerate(pol):
+        m = re.match(r"(\d+)\s*;\s*w=(\d+)", p)
+        if not m or i >= len(rem) or not rem[i].isdigit(): continue
+        lim, w = int(m.group(1)), int(m.group(2))
+        if w >= 86400 and lim > 0 and (best is None or w > best[0]): best = (w, int(rem[i]))
+    return best[1] if best else None
 def _brave_server_exhausted():
     return BRAVE_REMAINING["month"] == time.strftime("%Y-%m") and BRAVE_REMAINING["left"] is not None and BRAVE_REMAINING["left"] <= BRAVE_RESERVE
 
@@ -903,7 +914,7 @@ JOBS, QUEUE, JOBS_LOCK = {}, [], threading.Lock()
 def health():  # booleans only, never key values
     return jsonify({"brave_key_set": brave_on(), "google_factcheck_key_set": bool(os.environ.get("TF_GOOGLE_FACTCHECK_KEY")),
                     "gemini_key_set": bool(os.environ.get("TF_GEMINI_API_KEY")), "groq_key_set": bool(os.environ.get("TF_GROQ_API_KEY")),
-                    "brave_calls_this_month": _brave_month_count(), "brave_monthly_left": BRAVE_REMAINING["left"]})
+                    "brave_calls_this_month": _brave_month_count(), "brave_monthly_left": BRAVE_REMAINING["left"], "brave_rate_headers": BRAVE_HDRS})
 
 @app.get("/api/job/<jid>")
 def job_status(jid):
