@@ -20,5 +20,9 @@ services:
         sync: false   # set in dashboard
       - key: TF_GROQ_API_KEY
         sync: false   # set in dashboard
+      - key: TF_BRAVE_API_KEY
+        sync: false   # Brave Search API key (web/news/official/fact-checker search)
+      - key: TF_GOOGLE_FACTCHECK_KEY
+        sync: false   # Google Fact Check Tools API key
       - key: TF_DONATE_URL
         sync: false   # set once Nicholas has a Ko-fi page; button stays hidden until then

@@ -21,7 +21,62 @@ def wikipedia(q, n=6):
 
 DDG_LOCK = __import__("threading").Lock()
 DDG_DOWN_UNTIL = 0
+# ---- Brave Search (primary web backend when TF_BRAVE_API_KEY is set; DDG is the fallback) ----
+import contextvars
+BRAVE_LOCK = __import__("threading").Lock()
+BRAVE_LAST = 0.0
+BRAVE_MONTHLY_CAP = int(os.environ.get("TF_BRAVE_MONTHLY_CAP", "900"))   # safety margin under the free allowance
+BRAVE_PER_QUESTION = int(os.environ.get("TF_BRAVE_PER_QUESTION", "8"))   # max Brave calls for one question
+BRAVE_COUNT_FILE = os.environ.get("TF_BRAVE_COUNT_FILE", "/tmp/tf_brave_count.json")
+BRAVE_BUDGET = contextvars.ContextVar("brave_budget", default=None)    # [remaining] for the current question
+def brave_on(): return bool(os.environ.get("TF_BRAVE_API_KEY"))
+
+def _brave_month_count(inc=False):
+    month = time.strftime("%Y-%m")
+    try: d = json.load(open(BRAVE_COUNT_FILE))
+    except Exception: d = {}
+    if d.get("month") != month: d = {"month": month, "count": 0}
+    if inc:
+        d["count"] += 1
+        try: json.dump(d, open(BRAVE_COUNT_FILE, "w"))
+        except Exception: pass
+    return d["count"]
+
+def brave(q, n=5):
+    global BRAVE_LAST
+    budget = BRAVE_BUDGET.get()
+    with BRAVE_LOCK:  # one at a time, >=1.1 s apart (free tier is ~1 request/second)
+        if budget is not None and budget[0] <= 0: raise RuntimeError("Brave per-question budget used up")
+        if _brave_month_count() >= BRAVE_MONTHLY_CAP: raise RuntimeError("Brave monthly safety cap reached")
+        if budget is not None: budget[0] -= 1
+        wait = BRAVE_LAST + 1.1 - time.time()
+        if wait > 0: time.sleep(wait)
+        _brave_month_count(inc=True)
+        try:
+            r = requests.get("https://api.search.brave.com/res/v1/web/search", timeout=TIMEOUT,
+                             headers={"Accept": "application/json", "X-Subscription-Token": os.environ["TF_BRAVE_API_KEY"]},
+                             params={"q": q, "count": min(max(n, 1), 20), "safesearch": "moderate"})
+        finally: BRAVE_LAST = time.time()
+    if r.status_code == 429: raise RuntimeError("Brave rate limit hit")
+    r.raise_for_status()
+    txt = lambda h: BeautifulSoup(h or "", "html.parser").get_text(" ", strip=True)
+    out = []
+    for res in (r.json().get("web") or {}).get("results", []):
+        href = res.get("url", "")
+        if not href: continue
+        out.append({"title": txt(res.get("title")), "url": href, "snippet": txt(res.get("description")),
+                    "source": urlparse(href).netloc.replace("www.", ""), "kind": "Web"})
+        if len(out) >= n: break
+    return out
+
 def duckduckgo(q, n=5):
+    """Web search: Brave when TF_BRAVE_API_KEY is set, else (or if Brave fails) DuckDuckGo."""
+    if brave_on():
+        try: return brave(q, n)
+        except Exception as e: print("Brave unavailable, falling back to DuckDuckGo:", e)
+    return _duckduckgo(q, n)
+
+def _duckduckgo(q, n=5):
     # DuckDuckGo throttles parallel requests, so take turns and retry once if we get nothing back.
     global DDG_DOWN_UNTIL
     if time.time() < DDG_DOWN_UNTIL: raise RuntimeError("DuckDuckGo unreachable from this server (skipped for 10 min)")
@@ -109,7 +164,9 @@ def news(q, n=6):
 FACTCHECK_SITES = "site:snopes.com OR site:politifact.com OR site:factcheck.org OR site:fullfact.org OR site:reuters.com/fact-check OR site:apnews.com"
 def factcheckers(q, n=4):
     core = " ".join(sorted(keywords(q), key=q.lower().find))
-    out = duckduckgo(core + " site:snopes.com", 2) + duckduckgo(core + " site:politifact.com", 2) + duckduckgo(core + " fact check site:factcheck.org OR site:fullfact.org OR site:apnews.com OR site:reuters.com", 2)
+    if brave_on():  # one combined query to save Brave calls
+        out = duckduckgo(core + " fact check " + FACTCHECK_SITES, 6)
+    else: out = duckduckgo(core + " site:snopes.com", 2) + duckduckgo(core + " site:politifact.com", 2) + duckduckgo(core + " fact check site:factcheck.org OR site:fullfact.org OR site:apnews.com OR site:reuters.com", 2)
     for s in out: s["kind"] = "Fact-checker"
     return out
 
@@ -167,8 +224,9 @@ def classify(s):
 
 def gather(q):
     results, errors = [], []
+    if BRAVE_BUDGET.get() is None: BRAVE_BUDGET.set([BRAVE_PER_QUESTION])
     with cf.ThreadPoolExecutor(len(SOURCES)) as ex:
-        futs = {ex.submit(f, q): f.__name__ for f in SOURCES}
+        futs = {ex.submit(contextvars.copy_context().run, f, q): f.__name__ for f in SOURCES}
         for fu in cf.as_completed(futs):
             try: results += fu.result()
             except Exception as e: errors.append(f"{futs[fu]}: {type(e).__name__}")
@@ -753,6 +811,7 @@ def prepare(q):
 MIN_VOICES = int(os.environ.get("TF_MIN_VOICES", 15))
 def gather_wide(q, extra_queries):
     """Search the question; if fewer than MIN_VOICES independent voices, keep widening with the extra queries."""
+    BRAVE_BUDGET.set([BRAVE_PER_QUESTION])  # shared by the first search and all wider searches
     sources, errors = gather(q)
     tried = [q]
     for alt in extra_queries:
